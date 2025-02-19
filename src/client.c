@@ -1,13 +1,15 @@
 #include "client.h"
 #include <arpa/inet.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define MAX_INPUT 1024
+#define RESPONSE_SIZE 4096
 #define BS 10
-#define UNRECONIZED_STATUS 127
+#define TIMEOUT 1000
 
 int main(int argc, char *argv[])
 {
@@ -28,13 +30,16 @@ int main(int argc, char *argv[])
 
 void start_shell(int client_fd)
 {
-    char input[MAX_INPUT];    // Buffer to store user input
-    int  status = 0;
+    char          input[MAX_INPUT];    // Buffer to store user input
+    char          output[RESPONSE_SIZE];
+    struct pollfd pfd    = {client_fd, POLLIN, 0};
+    int           status = 0;
 
     while(1)
     {
         size_t  len;
         ssize_t bytes_read;
+        int     ret;
 
         printf("myshell$ ");
         fflush(stdout);
@@ -78,19 +83,40 @@ void start_shell(int client_fd)
             status = 1;    // Failure
             printf("Simulating failure: $? = %d\n", status);
         }
-        else
-        {
-            // Default behaviour for unrecognized input
-            printf("Unrecognized input: \"%s\"\n", input);
-            status = UNRECONIZED_STATUS;    // Indicate command not found
-        }
 
         bytes_read = write(client_fd, input, sizeof(input));
         if(bytes_read == -1)
         {
             perror("write");
-            return;
+            continue;
         }
+
+        memset(output, 0, RESPONSE_SIZE);
+
+        ret = poll(&pfd, 1, TIMEOUT);
+        // if timeout expired, continue polling fd
+        if(ret == 0)
+        {
+            continue;
+        }
+
+        // if error occured break loop
+        if(ret < 0)
+        {
+            break;
+        }
+        if(pfd.revents & POLLIN)
+        {
+            bytes_read = read(client_fd, output, RESPONSE_SIZE);
+            if(bytes_read == -1)
+            {
+                perror("read");
+                continue;
+            }
+        }
+
+        output[bytes_read] = '\0';
+        printf("%s\n", output);
     }
 }
 
@@ -109,7 +135,7 @@ int setup_client_socket(char *server_ip, long server_port)
     host_addrlen = sizeof(host_addr);
 
     host_addr.sin_family = AF_INET;
-    host_addr.sin_port   = htons(server_port);
+    host_addr.sin_port   = htons((uint16_t)server_port);
 
     if(inet_pton(AF_INET, server_ip, &host_addr.sin_addr) <= 0)
     {
