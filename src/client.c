@@ -5,22 +5,23 @@
 #include <string.h>
 #include <unistd.h>
 
-#define MAX_IP_LENGTH 16
 #define MAX_INPUT 1024
 #define BS 10
 #define UNRECONIZED_STATUS 127
 
 int main(int argc, char *argv[])
 {
-    char server_ip[MAX_IP_LENGTH];
-    long server_port = 0;
-    int  client_fd;
+    char *server_ip   = NULL;
+    long  server_port = 0;
+    int   client_fd;
 
-    parse_command_line(argc, argv, server_ip, &server_port);
+    parse_command_line(argc, argv, &server_ip, &server_port);
 
     client_fd = setup_client_socket(server_ip, server_port);
 
     start_shell(client_fd);
+
+    free(server_ip);
 
     return EXIT_SUCCESS;
 }
@@ -127,7 +128,7 @@ int setup_client_socket(char *server_ip, long server_port)
     return sockfd;
 }
 
-static void parse_command_line(int argc, char *argv[], char *server_ip, long *server_port)
+static void parse_command_line(int argc, char *argv[], char **server_ip, long *server_port)
 {
     int   arg;
     int   argcount = 0;
@@ -138,7 +139,14 @@ static void parse_command_line(int argc, char *argv[], char *server_ip, long *se
         switch(arg)
         {
             case 'a':
-                snprintf(server_ip, MAX_IP_LENGTH, "%s", optarg);
+                free(*server_ip);
+                *server_ip = (char *)malloc((strlen(optarg) * sizeof(char)) + 1);
+                if(!*server_ip)
+                {
+                    perror("malloc");
+                    exit(EXIT_FAILURE);
+                }
+                memcpy(*server_ip, optarg, strlen(optarg) + 1);
                 argcount++;
                 break;
             case 'p':
@@ -146,12 +154,14 @@ static void parse_command_line(int argc, char *argv[], char *server_ip, long *se
                 if(*endptr != '\0')
                 {
                     fprintf(stderr, "Invalid port number: %s\n", optarg);
+                    free(*server_ip);
                     exit(EXIT_FAILURE);
                 }
                 argcount++;
                 break;
             case '?':
                 usage();
+                free(*server_ip);
                 exit(EXIT_FAILURE);
             default:
                 printf("default");
@@ -162,6 +172,7 @@ static void parse_command_line(int argc, char *argv[], char *server_ip, long *se
     if(argcount != 2)
     {
         usage();
+        free(*server_ip);
         exit(EXIT_FAILURE);
     }
 }

@@ -10,8 +10,11 @@
 #define TIMEOUT 1000
 #define BUFFER_SIZE 1024
 #define MAX_COMMANDS 3
+#define PORT 8000
 
 sig_atomic_t static volatile g_running = 1;    // NOLINT
+
+int launch_processs(char **tokens);
 
 int main(void)
 {
@@ -19,9 +22,12 @@ int main(void)
 
     res = initialize_socket();
 
+    printf("\nGoodbye...\n");
+
     return res;
 }
 
+// handle CTRL-C
 void handle_sigint(int signum)
 {
     if(signum == SIGINT)
@@ -30,12 +36,13 @@ void handle_sigint(int signum)
     }
 }
 
+// call basic functions to setup ipv4 socket
 int initialize_socket(void)
 {
-    const int          PORT = 8080;
     struct sockaddr_in host_addr;
     socklen_t          host_addrlen;
 
+    // create ipv4 socket
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);    // NOLINT
     if(sockfd == -1)
     {
@@ -78,77 +85,137 @@ int initialize_socket(void)
     return sockfd;
 }
 
+// accpet clients
 int accept_clients(int server_sock, struct sockaddr_in host_addr, socklen_t host_addrlen)
 {
-    struct sockaddr_in client_addr;
-    socklen_t          client_addrlen;
-    int                sockn;
-    struct pollfd      pfd = {server_sock, POLLIN, 0};
-    char               buffer[BUFFER_SIZE + 1];
-    ssize_t            bytes_read;
-    char             **tokens;
-    int                itr;
-
-    client_addrlen = sizeof(client_addr);
+    // poll server_socket for incoming data
+    struct pollfd pfd = {server_sock, POLLIN, 0};
 
     signal(SIGINT, &handle_sigint);
 
     while(g_running)
     {
+        // poll to see if server has data to read
         int ret = poll(&pfd, 1, TIMEOUT);
 
+        // if timeout expired, continue polling fd
         if(ret == 0)
         {
             continue;
         }
 
+        // if error occured break loop
         if(ret < 0)
         {
             break;
         }
 
+        // if poll output is POLLIN, accpect
         if(pfd.revents & POLLIN)
         {
             int newsockfd = accept(server_sock, (struct sockaddr *)&host_addr, &host_addrlen);
 
             if(newsockfd < 0)
             {
-                if(errno == EAGAIN || errno == EWOULDBLOCK)
-                {
-                    if(!g_running)
-                    {    // Check g_running again
-                        break;
-                    }
-                    continue;
-                }
                 perror("accept");
                 break;
             }
 
-            sockn = getsockname(newsockfd, (struct sockaddr *)&client_addr, &client_addrlen);
-            if(sockn < 0)
-            {
-                perror("sockname");
-                continue;
-            }
-
             printf("Connection made\n");
+            // connection made, handle client tasks
+            handle_client(newsockfd);
+        }
+    }
 
-            bytes_read = read(newsockfd, buffer, (size_t)BUFFER_SIZE);
+    return server_sock;
+}
+
+// wait for stuff to read. Tokenize input.
+int handle_client(int clientfd)
+{
+    int res;
+
+    res = read_and_tokenize(clientfd);
+
+    return res;
+}
+
+int launch_processs(char **tokens)
+{
+    pid_t pid;
+    int   status;
+
+    pid = fork();
+    if(pid == 0)
+    {
+        // child
+        if(execv("/bin/ls", tokens) == -1)
+        {
+            perror("exec");
+        }
+        exit(EXIT_FAILURE);
+    }
+    else if(pid < 0)
+    {
+        // fork error
+        perror("fork");
+    }
+    else
+    {
+        // parent process
+        do
+        {
+            pid_t wpid;
+            wpid = waitpid(pid, &status, WUNTRACED);
+            printf("wpid: %d\n", (int)wpid);
+        } while(!WIFEXITED(status) && !WIFSIGNALED(status));
+    }
+
+    return 1;
+}
+
+// read input from socket and call tokenize
+int read_and_tokenize(int clientfd)
+{
+    char   buffer[BUFFER_SIZE + 1];
+    char **tokens;
+    int    itr;
+
+    struct pollfd pfd = {clientfd, POLLIN, 0};
+
+    signal(SIGINT, &handle_sigint);
+
+    while(g_running)
+    {
+        // wait for client connection to have incoming data
+        int ret = poll(&pfd, 1, TIMEOUT);
+
+        // error polling
+        if(ret < 0)
+        {
+            break;
+        }
+        // Timeout expired, continue
+        if(ret == 0)
+        {
+            continue;
+        }
+
+        if(pfd.revents & POLLIN)
+        {
+            ssize_t bytes_read;
+
+            bytes_read = read(clientfd, buffer, (size_t)BUFFER_SIZE);
             if(bytes_read < 0)
             {
-                if(errno == EAGAIN || errno == EWOULDBLOCK)
-                {
-                    continue;
-                }
                 perror("read");
                 continue;
             }
 
+            // null terminate buffer
             buffer[bytes_read] = '\0';
 
-            printf("%s\n", buffer);
-
+            // tokenize buffer
             tokens = tokenize_commands(buffer);
 
             itr = 0;
@@ -156,40 +223,50 @@ int accept_clients(int server_sock, struct sockaddr_in host_addr, socklen_t host
             {
                 while(tokens[itr] != NULL)
                 {
+                    launch_processs(tokens);
                     printf("token: %s\n", tokens[itr]);
-                    printf("length: %zu\n", strlen(tokens[itr]));
                     itr++;
                 }
 
+                // free all tokens and array of tokens
                 for(int i = 0; tokens[i] != NULL; i++)
                 {
                     free(tokens[i]);
                 }
                 free((void *)tokens);
             }
-
-            close(newsockfd);
-            printf("closing connection\n");
         }
     }
 
-    printf("done in loop\n");
-
-    return server_sock;
+    // close client connection
+    close(clientfd);
+    printf("closing client connection\n");
+    return 0;
 }
 
+// tokenize the input
 char **tokenize_commands(char *buffer)
 {
-    char      **tokens;
-    const char *token;
-    char       *rest = buffer;
-    int         index;
+    char      **tokens;                    // array of tokens
+    char      **temp;                      // temp array to store reallocated array
+    const char *token;                     // token buffer
+    char       *rest = buffer;             // pointer to char * to keep context of where we are in the buffer
+    int         index;                     // index of tokens array
+    int         bufsize = MAX_COMMANDS;    // initial amount of tokens allowed
 
-    tokens = (char **)malloc(MAX_COMMANDS * sizeof(char *));
+    // alloacte space for tokens
+    tokens = (char **)malloc((size_t)bufsize * sizeof(char *));
+    if(!tokens)
+    {
+        perror("malloc fail");
+        return NULL;
+    }
 
     index = 0;
+    // tokenize buffer until null is reached
     while((token = strtok_r(rest, " ", &rest)))
     {
+        // malloc space for token
         tokens[index] = (char *)malloc((strlen(token) + 1) * sizeof(char));
         if(tokens[index] == NULL)
         {
@@ -197,14 +274,28 @@ char **tokenize_commands(char *buffer)
             free((void *)tokens);
             return NULL;
         }
+        // copy token into tokens array
         strcpy(tokens[index], token);
         index++;
+
+        // if max tokens is reached. realloc to add more space
+        if(index >= bufsize)
+        {
+            bufsize += MAX_COMMANDS;
+            temp = (char **)realloc((void *)tokens, (size_t)bufsize * sizeof(char *));
+            if(!tokens)
+            {
+                perror("realloc fail");
+                free((void *)tokens);
+                return NULL;
+            }
+
+            tokens = temp;
+        }
     }
 
+    // add null to end of tokens array
     tokens[index] = NULL;
 
     return tokens;
 }
-
-// reece huy
-// 0123456789
