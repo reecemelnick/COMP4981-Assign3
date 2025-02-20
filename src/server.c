@@ -1,4 +1,5 @@
 #include "server.h"
+#include "../include/builtins.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <poll.h>
@@ -10,24 +11,14 @@
 #include <unistd.h>
 
 #define TIMEOUT 1000
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 #define MAX_COMMANDS 3
 #define PORT 8000
 #define BUILTINS 6
-#define PATH_MAX 4096
 
 sig_atomic_t static volatile g_running = 1;    // NOLINT
 
-int built_cd(char *message, char **args);
-int built_help(char *message, char **args);
-int built_exit(char *message, char **args);
-int built_echo(char *message, char **args);
-int built_pwd(char *message, char **args);
-int built_type(char *message, char **args);
-
-int   launch_processs(int client_fd, char **tokens);
-int   excecute_shell(int fd, char **args);
-char *get_full_path(char **args);
+void sigchld_handler(int signo);
 
 int main(void)
 {
@@ -98,6 +89,14 @@ int initialize_socket(void)
     return sockfd;
 }
 
+void sigchld_handler(int signo)
+{
+    (void)signo;
+    while(waitpid(-1, NULL, WNOHANG) > 0)
+    {
+    }
+}
+
 // accpet clients
 int accept_clients(int server_sock, struct sockaddr_in host_addr, socklen_t host_addrlen)
 {
@@ -126,8 +125,8 @@ int accept_clients(int server_sock, struct sockaddr_in host_addr, socklen_t host
         // if poll output is POLLIN, accpect
         if(pfd.revents & POLLIN)
         {
-            int newsockfd = accept(server_sock, (struct sockaddr *)&host_addr, &host_addrlen);
-
+            pid_t pid;
+            int   newsockfd = accept(server_sock, (struct sockaddr *)&host_addr, &host_addrlen);
             if(newsockfd < 0)
             {
                 perror("accept");
@@ -135,119 +134,29 @@ int accept_clients(int server_sock, struct sockaddr_in host_addr, socklen_t host
             }
 
             printf("Connection made\n");
-            // connection made, handle client tasks
-            handle_client(newsockfd);
+
+            pid = fork();
+            if(pid == 0)
+            {
+                close(server_sock);
+                handle_client(newsockfd);
+                close(newsockfd);
+                exit(0);
+            }
+            else if(pid > 0)
+            {
+                close(newsockfd);
+            }
+            else
+            {
+                perror("fork fail");
+            }
         }
     }
+
+    signal(SIGCHLD, sigchld_handler);
 
     return server_sock;
-}
-
-int built_cd(char *message, char **args)
-{
-    if(args[1] == NULL)
-    {
-        fprintf(stderr, "lsh: expected argument to \"cd\"\n");
-        strcpy(message, "lsh: expected argument to \"cd\"\n");
-    }
-    else
-    {
-        if(chdir(args[1]) != 0)
-        {
-            perror("lsh");
-        }
-    }
-    return 1;
-}
-
-int built_echo(char *message, char **args)
-{
-    int i = 1;
-
-    while(args[i] != NULL)
-    {
-        printf("%s ", args[i]);
-        i++;
-    }
-    printf("\n");
-
-    strcpy(message, "echo");
-
-    return 1;
-}
-
-int built_pwd(char *message, char **args)
-{
-    char cwd[PATH_MAX];
-
-    printf("%s\n", args[0]);
-
-    if(getcwd(cwd, sizeof(cwd)) == NULL)
-    {
-        perror("pwd");
-        return 1;
-    }
-
-    printf("%s\n", cwd);
-    strcpy(message, "pwd");
-
-    return 1;
-}
-
-int built_help(char *message, char **args)
-{
-    int i;
-
-    const char *builtin_str[] = {"cd", "help", "exit", "pwd", "echo", "type"};
-
-    printf("%s\n", args[0]);
-
-    for(i = 0; i < BUILTINS; i++)
-    {
-        printf("  %s\n", builtin_str[i]);
-    }
-
-    printf("Use the man command for information on other programs.\n");
-    strcpy(message, "Use the man command for information on other programs.\n");
-    return 1;
-}
-
-int built_exit(char *message, char **args)
-{
-    if(message == NULL)
-    {
-        perror("Message pointer is NULL");
-        return -1;
-    }
-
-    strcpy(message, "exiting");
-    printf("%s %s\n", args[0], message);
-    printf("Exiting........\n");
-    return 1;
-}
-
-int built_type(char *message, char **args)
-{
-    const char *builtin_str[] = {"cd", "help", "exit", "pwd", "echo", "type"};
-
-    if(args[1] == NULL)
-    {
-        fprintf(stderr, "type: expected argument\n");
-        strcpy(message, "type: expected argument\n");
-        return 1;
-    }
-
-    for(int i = 0; i < (int)(sizeof(builtin_str) / sizeof(builtin_str[0])); i++)
-    {
-        if(strcmp(args[1], builtin_str[i]) == 0)
-        {
-            printf("%s is a shell built-in command\n", args[1]);
-            return 1;
-        }
-    }
-
-    printf("%s is an external command\n", args[1]);
-    return 1;
 }
 
 // wait for stuff to read. Tokenize input.
@@ -285,10 +194,16 @@ int excecute_shell(int fd, char **args)
         if(strcmp(args[0], builtin_str[i]) == 0)
         {
             res = (*builtin_func[i])(result_message, args);
-            if(res != 1)
+            if(res == -1)
             {
                 perror("built in");
                 return -1;
+            }
+
+            // exit code
+            if(res == 2)
+            {
+                return 2;
             }
 
             printf("about to write: %s\n", result_message);
@@ -356,15 +271,16 @@ int launch_processs(int client_fd, char **tokens)
     if(pid == 0)
     {
         char *path = get_full_path(tokens);
-        if(path == NULL)
+
+        if(dup2(client_fd, STDOUT_FILENO) == -1 || dup2(client_fd, STDERR_FILENO) == -1)
         {
-            fprintf(stderr, "%s: command not found\n", tokens[0]);
+            perror("dup2 failed");
             exit(EXIT_FAILURE);
         }
 
-        if(dup2(client_fd, STDOUT_FILENO) == -1)
+        if(path == NULL || access(path, X_OK) == -1)
         {
-            perror("dup2 failed");
+            fprintf(stderr, "%s: command not found\n", tokens[0]);
             exit(EXIT_FAILURE);
         }
 
@@ -373,8 +289,6 @@ int launch_processs(int client_fd, char **tokens)
         {
             perror("exec");
         }
-
-        write(client_fd, "\n", 1);
 
         free(path);
         exit(EXIT_FAILURE);
@@ -464,6 +378,15 @@ int read_and_tokenize(int clientfd)
                     free(tokens[i]);
                 }
                 free((void *)tokens);
+            }
+
+            printf("%d\n", res);
+
+            // exit code
+            if(res == 2)
+            {
+                printf("braking");
+                break;
             }
         }
     }

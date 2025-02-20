@@ -32,8 +32,7 @@ void start_shell(int client_fd)
 {
     char          input[MAX_INPUT];    // Buffer to store user input
     char          output[RESPONSE_SIZE];
-    struct pollfd pfd    = {client_fd, POLLIN, 0};
-    int           status = 0;
+    struct pollfd pfd = {client_fd, POLLIN, 0};
 
     while(1)
     {
@@ -54,34 +53,6 @@ void start_shell(int client_fd)
         if(len > 0 && input[len - 1] == '\n')
         {
             input[len - 1] = '\0';
-        }
-
-        if(strcmp(input, "exit") == 0)
-        {
-            printf("Exiting shell...\n");
-            break;
-        }
-
-        for(char *p = input; (p = strstr(p, "$?"));)
-        {
-            char   temp[MAX_INPUT];
-            size_t prefix_len;
-            snprintf(temp, sizeof(temp), "%d", status);
-            prefix_len = (size_t)(p - input);    // Text before "$?"
-            snprintf(temp, sizeof(temp), "%.*s%d%s", (int)prefix_len, input, status, p + 2);
-            strcpy(input, temp);
-        }
-
-        // Simulate an exit status for demonstration
-        if(strcmp(input, "simulate_success") == 0)
-        {
-            status = 0;    // Success
-            printf("Simulating success: $? = %d\n", status);
-        }
-        else if(strcmp(input, "simulate_failure") == 0)
-        {
-            status = 1;    // Failure
-            printf("Simulating failure: $? = %d\n", status);
         }
 
         bytes_read = write(client_fd, input, sizeof(input));
@@ -113,6 +84,12 @@ void start_shell(int client_fd)
                 perror("read");
                 continue;
             }
+        }
+
+        if(strcmp(input, "exit") == 0)
+        {
+            printf("Exiting shell...\n");
+            break;
         }
 
         output[bytes_read] = '\0';
