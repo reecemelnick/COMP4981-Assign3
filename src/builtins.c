@@ -99,11 +99,13 @@ int built_type(char *message, char **args)
     {
         if(strcmp(args[1], builtin_str[i]) == 0)
         {
-            printf("%s is a shell built-in command\n", args[1]);
+            strcat(message, args[1]);
+            strcat(message, " is a shell built-in command\n");
             return 1;
         }
     }
 
-    printf("%s is an external command\n", args[1]);
+    strcat(message, args[1]);
+    strcat(message, " is an external command\n");
     return 1;
 }

@@ -385,7 +385,6 @@ int read_and_tokenize(int clientfd)
             // exit code
             if(res == 2)
             {
-                printf("braking");
                 break;
             }
         }
