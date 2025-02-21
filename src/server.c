@@ -14,9 +14,10 @@
 #define BUFFER_SIZE 4096
 #define MAX_COMMANDS 3
 #define PORT 8000
+#define PADDING 10
 #define BUILTINS 6
 
-sig_atomic_t static volatile g_running = 1;    // NOLINT
+static sig_atomic_t volatile g_running = 1;    // NOLINT
 
 void sigchld_handler(int signo);
 
@@ -239,14 +240,14 @@ char *get_full_path(char **args)
         {
             size_t cmd_len = strlen(path) + strlen(args[0]) + 2;
 
-            cmd_path = (char *)malloc(cmd_len);
+            cmd_path = (char *)malloc(cmd_len + PADDING);
             if(cmd_path == NULL)
             {
                 perror("malloc");
                 exit(EXIT_FAILURE);
             }
 
-            snprintf(cmd_path, cmd_len, "%s/%s", path, args[0]);
+            snprintf(cmd_path, cmd_len + PADDING, "%s/%s", path, args[0]);
 
             if(access(cmd_path, X_OK) == 0)
             {
@@ -272,7 +273,15 @@ int launch_processs(int client_fd, char **tokens)
     {
         char *path = get_full_path(tokens);
 
-        if(dup2(client_fd, STDOUT_FILENO) == -1 || dup2(client_fd, STDERR_FILENO) == -1)
+        status = dup2(client_fd, STDOUT_FILENO);
+        if(status == -1)
+        {
+            perror("dup2 failed");
+            exit(EXIT_FAILURE);
+        }
+
+        status = dup2(client_fd, STDERR_FILENO);
+        if(status == -1)
         {
             perror("dup2 failed");
             exit(EXIT_FAILURE);
@@ -435,7 +444,7 @@ char **tokenize_commands(char *buffer)
         {
             bufsize += MAX_COMMANDS;
             temp = (char **)realloc((void *)tokens, (size_t)bufsize * sizeof(char *));
-            if(!tokens)
+            if(!temp)
             {
                 perror("realloc fail");
                 free((void *)tokens);
