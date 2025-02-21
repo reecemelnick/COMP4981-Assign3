@@ -34,6 +34,12 @@ void start_shell(int client_fd)
     char          output[RESPONSE_SIZE];
     struct pollfd pfd = {client_fd, POLLIN, 0};
 
+    if(client_fd < 0)
+    {
+        perror("file discriptor");
+        return;
+    }
+
     while(1)
     {
         size_t  len;
@@ -55,7 +61,7 @@ void start_shell(int client_fd)
             input[len - 1] = '\0';
         }
 
-        bytes_read = write(client_fd, input, sizeof(input));
+        bytes_read = write(client_fd, input, strlen(input));
         if(bytes_read == -1)
         {
             perror("write");
@@ -94,6 +100,9 @@ void start_shell(int client_fd)
 
         output[bytes_read] = '\0';
         printf("%s\n", output);
+
+        output[0] = '\0';
+        input[0]  = '\0';
     }
 }
 

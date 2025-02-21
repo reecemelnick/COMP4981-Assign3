@@ -185,6 +185,9 @@ int excecute_shell(int fd, char **args)
     ssize_t bytes_wrote;
     int     res;
 
+    fflush(stdout);
+    memset(result_message, 0, strlen(result_message));
+
     if(args == NULL || args[0] == NULL)
     {
         return -1;
@@ -396,6 +399,8 @@ int read_and_tokenize(int clientfd)
             {
                 break;
             }
+
+            buffer[0] = '\0';
         }
     }
 
