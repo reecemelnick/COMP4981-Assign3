@@ -363,6 +363,11 @@ int read_and_tokenize(int clientfd)
                 return -1;
             }
 
+            if(bytes_read == 0)
+            {
+                return -1;
+            }
+
             // null terminate buffer
             buffer[bytes_read] = '\0';
 
